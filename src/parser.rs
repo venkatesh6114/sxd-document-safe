@@ -3,7 +3,7 @@
 //! ### Example
 //!
 //! ```
-//! use sxd_document::parser;
+//! use sxd_document_no_unsafe::parser;
 //! let xml = r#"<?xml version="1.0"?>
 //! <!-- Awesome data incoming -->
 //! <data awesome="true">
@@ -28,6 +28,9 @@ use peresil::{self, ParseMaster, Recoverable, StringPoint};
 use self::Reference::*;
 
 use super::{dom, str::XmlStr, PrefixedName, QName};
+
+#[cfg(feature = "no-unsafe")]
+use crate::string_pool::InternedString;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum SpecificError {
@@ -907,18 +910,35 @@ impl<'d> DomBuilder<'d> {
         }
     }
 
+    #[cfg(not(feature = "no-unsafe"))]
     fn default_namespace_uri(&self) -> Option<&str> {
         self.elements
             .last()
             .and_then(|e| e.recursive_default_namespace_uri())
     }
 
+    #[cfg(feature = "no-unsafe")]
+    fn default_namespace_uri(&self) -> Option<InternedString> {
+        self.elements
+            .last()
+            .and_then(|e| e.recursive_default_namespace_uri())
+    }
+
+    #[cfg(not(feature = "no-unsafe"))]
     fn namespace_uri_for_prefix(&self, prefix: &str) -> Option<&str> {
         self.elements
             .last()
             .and_then(|e| e.namespace_uri_for_prefix(prefix))
     }
 
+    #[cfg(feature = "no-unsafe")]
+    fn namespace_uri_for_prefix(&self, prefix: &str) -> Option<InternedString> {
+        self.elements
+            .last()
+            .and_then(|e| e.namespace_uri_for_prefix(prefix))
+    }
+
+    #[allow(clippy::needless_option_as_deref)]
     fn finish_opening_tag(&mut self) -> DomBuilderResult<()> {
         let deferred_element = self.element_names.last().expect("Unknown element name");
         let attributes = DeferredAttributes::new(std::mem::take(&mut self.attributes));
@@ -941,8 +961,10 @@ impl<'d> DomBuilder<'d> {
         let element_name = &deferred_element.value;
 
         let element = if let Some(prefix) = element_name.prefix {
-            let ns_uri = new_prefix_mappings.get(prefix).map(|p| &p[..]);
-            let ns_uri = ns_uri.or_else(|| self.namespace_uri_for_prefix(prefix));
+            let ns_uri_from_map = new_prefix_mappings.get(prefix).map(|p| &p[..]);
+            let ns_uri_from_parent = self.namespace_uri_for_prefix(prefix);
+            let ns_uri: Option<&str> =
+                ns_uri_from_map.or(ns_uri_from_parent.as_deref());
 
             if let Some(ns_uri) = ns_uri {
                 let element = self.doc.create_element((ns_uri, element_name.local_part));
@@ -965,7 +987,7 @@ impl<'d> DomBuilder<'d> {
             }
         } else {
             let ns_uri = self.default_namespace_uri();
-            let name = QName::with_namespace_uri(ns_uri, element_name.local_part);
+            let name = QName::with_namespace_uri(ns_uri.as_deref(), element_name.local_part);
             self.doc.create_element(name)
         };
 
@@ -990,8 +1012,10 @@ impl<'d> DomBuilder<'d> {
             builder.ingest(&attribute.values)?;
 
             if let Some(prefix) = name.prefix {
-                let ns_uri = new_prefix_mappings.get(prefix).map(|p| &p[..]);
-                let ns_uri = ns_uri.or_else(|| self.namespace_uri_for_prefix(prefix));
+                let ns_uri_from_map = new_prefix_mappings.get(prefix).map(|p| &p[..]);
+                let ns_uri_from_parent = self.namespace_uri_for_prefix(prefix);
+                let ns_uri: Option<&str> =
+                    ns_uri_from_map.or(ns_uri_from_parent.as_deref());
 
                 if let Some(ns_uri) = ns_uri {
                     let attr = element.set_attribute_value((ns_uri, name.local_part), &builder);
@@ -1348,7 +1372,7 @@ mod test {
     use crate::{dom, Package, QName};
 
     macro_rules! assert_qname_eq(
-        ($l:expr, $r:expr) => (assert_eq!(Into::<QName<'_>>::into($l), $r.into()));
+        ($l:expr, $r:expr) => (assert_eq!(crate::as_qname!($l), Into::<QName<'_>>::into($r)));
     );
 
     fn full_parse(xml: &str) -> Result<Package, Error> {
@@ -1546,8 +1570,8 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.preferred_prefix(), Some("ns"));
-        assert_qname_eq!(("namespace", "hello"), top.name());
+        assert_eq!(crate::as_opt_str!(top.preferred_prefix()), Some("ns"));
+        assert_qname_eq!(top.name(), ("namespace", "hello"));
     }
 
     #[test]
@@ -1556,8 +1580,8 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.default_namespace_uri(), Some("namespace"));
-        assert_qname_eq!(("namespace", "hello"), top.name());
+        assert_eq!(crate::as_opt_str!(top.default_namespace_uri()), Some("namespace"));
+        assert_qname_eq!(top.name(), ("namespace", "hello"));
     }
 
     #[test]
@@ -1566,7 +1590,7 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.attribute_value("scope"), Some("world"));
+        assert_eq!(crate::as_opt_str!(top.attribute_value("scope")), Some("world"));
     }
 
     #[test]
@@ -1575,7 +1599,7 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.attribute_value("scope"), Some("world"));
+        assert_eq!(crate::as_opt_str!(top.attribute_value("scope")), Some("world"));
     }
 
     #[test]
@@ -1584,8 +1608,8 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.attribute_value("scope"), Some("world"));
-        assert_eq!(top.attribute_value("happy"), Some("true"));
+        assert_eq!(crate::as_opt_str!(top.attribute_value("scope")), Some("world"));
+        assert_eq!(crate::as_opt_str!(top.attribute_value("happy")), Some("true"));
     }
 
     #[test]
@@ -1596,8 +1620,8 @@ mod test {
 
         let attr = top.attribute(("namespace", "a")).unwrap();
 
-        assert_eq!(attr.preferred_prefix(), Some("ns"));
-        assert_eq!(attr.value(), "b");
+        assert_eq!(crate::as_opt_str!(attr.preferred_prefix()), Some("ns"));
+        assert_eq!(crate::as_str!(attr.value()), "b");
     }
 
     #[test]
@@ -1607,15 +1631,15 @@ mod test {
         let top = top(&doc);
 
         assert_eq!(
-            top.attribute((crate::XML_NS_URI, "space")).unwrap().value(),
+            crate::as_str!(top.attribute((crate::XML_NS_URI, "space")).unwrap().value()),
             "preserve"
         );
 
         let children = top.children();
         assert_eq!(children.len(), 3);
-        assert_eq!(children[0].text().unwrap().text(), " ");
+        assert_eq!(crate::as_str!(children[0].text().unwrap().text()), " ");
         assert_qname_eq!(children[1].element().unwrap().name(), "a");
-        assert_eq!(children[2].text().unwrap().text(), " ");
+        assert_eq!(crate::as_str!(children[2].text().unwrap().text()), " ");
     }
 
     #[test]
@@ -1624,7 +1648,7 @@ mod test {
         let doc = package.as_document();
         let top = top(&doc);
 
-        assert_eq!(top.attribute_value("msg"), Some("I <3 math"));
+        assert_eq!(crate::as_opt_str!(top.attribute_value("msg")), Some("I <3 math"));
     }
 
     #[test]
@@ -1675,7 +1699,7 @@ mod test {
         let hello = top(&doc);
         let world = hello.children()[0].element().unwrap();
 
-        assert_eq!(world.preferred_prefix(), Some("ns1"));
+        assert_eq!(crate::as_opt_str!(world.preferred_prefix()), Some("ns1"));
         assert_qname_eq!(world.name(), ("outer", "world"));
     }
 
@@ -1706,7 +1730,7 @@ mod test {
         let hello = top(&doc);
         let world = hello.children()[0].element().unwrap();
 
-        assert_eq!(world.attribute_value("name"), Some("Earth"));
+        assert_eq!(crate::as_opt_str!(world.attribute_value("name")), Some("Earth"));
     }
 
     #[test]
@@ -1718,8 +1742,8 @@ mod test {
 
         let attr = world.attribute(("outer", "name")).unwrap();
 
-        assert_eq!(attr.preferred_prefix(), Some("ns1"));
-        assert_eq!(attr.value(), "Earth");
+        assert_eq!(crate::as_opt_str!(attr.preferred_prefix()), Some("ns1"));
+        assert_eq!(crate::as_str!(attr.value()), "Earth");
     }
 
     #[test]
@@ -1729,7 +1753,7 @@ mod test {
         let hello = top(&doc);
         let text = hello.children()[0].text().unwrap();
 
-        assert_eq!(text.text(), "world");
+        assert_eq!(crate::as_str!(text.text()), "world");
     }
 
     #[test]
@@ -1739,7 +1763,7 @@ mod test {
         let words = top(&doc);
         let text = words.children()[0].text().unwrap();
 
-        assert_eq!(text.text(), "I have & and < !");
+        assert_eq!(crate::as_str!(text.text()), "I have & and < !");
     }
 
     #[test]
@@ -1749,7 +1773,7 @@ mod test {
         let words = top(&doc);
         let comment = words.children()[0].comment().unwrap();
 
-        assert_eq!(comment.text(), " A comment ");
+        assert_eq!(crate::as_str!(comment.text()), " A comment ");
     }
 
     #[test]
@@ -1758,7 +1782,7 @@ mod test {
         let doc = package.as_document();
         let comment = doc.root().children()[0].comment().unwrap();
 
-        assert_eq!(comment.text(), " A comment ");
+        assert_eq!(crate::as_str!(comment.text()), " A comment ");
     }
 
     #[test]
@@ -1772,8 +1796,8 @@ mod test {
         let comment1 = doc.root().children()[0].comment().unwrap();
         let comment2 = doc.root().children()[1].comment().unwrap();
 
-        assert_eq!(comment1.text(), "Comment 1");
-        assert_eq!(comment2.text(), "Comment 2");
+        assert_eq!(crate::as_str!(comment1.text()), "Comment 1");
+        assert_eq!(crate::as_str!(comment2.text()), "Comment 2");
     }
 
     #[test]
@@ -1787,8 +1811,8 @@ mod test {
         let comment1 = doc.root().children()[1].comment().unwrap();
         let comment2 = doc.root().children()[2].comment().unwrap();
 
-        assert_eq!(comment1.text(), "Comment 1");
-        assert_eq!(comment2.text(), "Comment 2");
+        assert_eq!(crate::as_str!(comment1.text()), "Comment 1");
+        assert_eq!(crate::as_str!(comment2.text()), "Comment 2");
     }
 
     #[test]
@@ -1798,8 +1822,8 @@ mod test {
         let hello = top(&doc);
         let pi = hello.children()[0].processing_instruction().unwrap();
 
-        assert_eq!(pi.target(), "device");
-        assert_eq!(pi.value(), None);
+        assert_eq!(crate::as_str!(pi.target()), "device");
+        assert_eq!(crate::as_opt_str!(pi.value()), None);
     }
 
     #[test]
@@ -1814,11 +1838,11 @@ mod test {
         let pi1 = doc.root().children()[0].processing_instruction().unwrap();
         let pi2 = doc.root().children()[2].processing_instruction().unwrap();
 
-        assert_eq!(pi1.target(), "output");
-        assert_eq!(pi1.value(), Some("printer"));
+        assert_eq!(crate::as_str!(pi1.target()), "output");
+        assert_eq!(crate::as_opt_str!(pi1.value()), Some("printer"));
 
-        assert_eq!(pi2.target(), "validated");
-        assert_eq!(pi2.value(), None);
+        assert_eq!(crate::as_str!(pi2.target()), "validated");
+        assert_eq!(crate::as_opt_str!(pi2.value()), None);
     }
 
     #[test]
@@ -1830,9 +1854,9 @@ mod test {
         let text2 = math.children()[1].text().unwrap();
         let text3 = math.children()[2].text().unwrap();
 
-        assert_eq!(text1.text(), "2 ");
-        assert_eq!(text2.text(), ">");
-        assert_eq!(text3.text(), " 1");
+        assert_eq!(crate::as_str!(text1.text()), "2 ");
+        assert_eq!(crate::as_str!(text2.text()), ">");
+        assert_eq!(crate::as_str!(text3.text()), " 1");
     }
 
     #[test]
@@ -1844,9 +1868,9 @@ mod test {
         let text2 = math.children()[1].text().unwrap();
         let text3 = math.children()[2].text().unwrap();
 
-        assert_eq!(text1.text(), "1 ");
-        assert_eq!(text2.text(), "<");
-        assert_eq!(text3.text(), " 2");
+        assert_eq!(crate::as_str!(text1.text()), "1 ");
+        assert_eq!(crate::as_str!(text2.text()), "<");
+        assert_eq!(crate::as_str!(text3.text()), " 2");
     }
 
     #[test]
@@ -1858,9 +1882,9 @@ mod test {
         let text2 = math.children()[1].text().unwrap();
         let text3 = math.children()[2].text().unwrap();
 
-        assert_eq!(text1.text(), "I ");
-        assert_eq!(text2.text(), "<");
-        assert_eq!(text3.text(), "3 math");
+        assert_eq!(crate::as_str!(text1.text()), "I ");
+        assert_eq!(crate::as_str!(text2.text()), "<");
+        assert_eq!(crate::as_str!(text3.text()), "3 math");
     }
 
     #[test]
@@ -1874,10 +1898,10 @@ mod test {
         let element = hello.children()[2].element().unwrap();
         let pi = hello.children()[3].processing_instruction().unwrap();
 
-        assert_eq!(text.text(), "to ");
-        assert_eq!(comment.text(), "fixme");
+        assert_eq!(crate::as_str!(text.text()), "to ");
+        assert_eq!(crate::as_str!(comment.text()), "fixme");
         assert_qname_eq!(element.name(), "a");
-        assert_eq!(pi.target(), "world");
+        assert_eq!(crate::as_str!(pi.target()), "world");
     }
 
     // TODO: untested errors

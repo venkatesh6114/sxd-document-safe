@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use sxd_document::__internal::StringPool;
+use sxd_document_no_unsafe::__internal::StringPool;
 
 fn single_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_string");

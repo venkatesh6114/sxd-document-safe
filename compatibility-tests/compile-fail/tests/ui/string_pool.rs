@@ -1,4 +1,4 @@
-use sxd_document::__internal::StringPool;
+use sxd_document_no_unsafe::__internal::StringPool;
 
 fn string_cannot_outlive_the_pool() {
     let _s = {

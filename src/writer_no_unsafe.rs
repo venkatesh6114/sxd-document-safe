@@ -1,31 +1,8 @@
 //! Formats a DOM structure to a Write
-//!
-//! ### Example
-//! ```
-//! use sxd_document_no_unsafe::Package;
-//! use sxd_document_no_unsafe::writer::format_document;
-//!
-//! let package = Package::new();
-//! let doc = package.as_document();
-//!
-//! let hello = doc.create_element("hello");
-//! hello.set_attribute_value("planet", "Earth");
-//! doc.root().append_child(hello);
-//!
-//! let mut output = Vec::new();
-//! format_document(&doc, &mut output).expect("unable to output XML");
-//! ```
-//!
-//! ### Potential options to support
-//!
-//! - Space before `/>`
-//! - Single vs double quotes
-//! - Fixed ordering of attributes
 
 use std::{
     borrow::ToOwned,
     io::{self, Write},
-    slice,
 };
 
 use self::Content::*;
@@ -49,16 +26,15 @@ trait WriteStr: Write {
 
 impl<W: ?Sized> WriteStr for W where W: Write {}
 
-// TODO: Duplicating the String seems inefficient...
-struct PrefixScope<'d> {
-    ns_to_prefix: LazyHashMap<&'d str, String>,
-    prefix_to_ns: LazyHashMap<String, &'d str>,
-    defined_prefixes: Vec<(String, &'d str)>,
-    default_namespace_uri: Option<&'d str>,
+struct PrefixScope {
+    ns_to_prefix: LazyHashMap<String, String>,
+    prefix_to_ns: LazyHashMap<String, String>,
+    defined_prefixes: Vec<(String, String)>,
+    default_namespace_uri: Option<String>,
 }
 
-impl<'d> PrefixScope<'d> {
-    fn new() -> PrefixScope<'d> {
+impl PrefixScope {
+    fn new() -> PrefixScope {
         PrefixScope {
             ns_to_prefix: LazyHashMap::new(),
             prefix_to_ns: LazyHashMap::new(),
@@ -77,28 +53,30 @@ impl<'d> PrefixScope<'d> {
 
     fn prefix_is(&self, prefix: &str, namespace_uri: &str) -> bool {
         match self.prefix_to_ns.get(prefix) {
-            Some(ns) => *ns == namespace_uri,
+            Some(ns) => ns == namespace_uri,
             _ => false,
         }
     }
 
-    fn namespace_uri_for(&self, prefix: &str) -> Option<&'d str> {
-        self.prefix_to_ns.get(prefix).cloned()
+    fn namespace_uri_for(&self, prefix: &str) -> Option<&str> {
+        self.prefix_to_ns.get(prefix).map(|s| &s[..])
     }
 
     fn prefix_for(&self, namespace_uri: &str) -> Option<&str> {
         self.ns_to_prefix.get(namespace_uri).map(|p| &p[..])
     }
 
-    fn add_mapping(&mut self, prefix: &str, namespace_uri: &'d str) {
+    fn add_mapping(&mut self, prefix: &str, namespace_uri: &str) {
         let prefix = prefix.to_owned();
-
-        self.prefix_to_ns.insert(prefix.clone(), namespace_uri);
-        self.ns_to_prefix.insert(namespace_uri, prefix);
+        self.prefix_to_ns
+            .insert(prefix.clone(), namespace_uri.to_owned());
+        self.ns_to_prefix
+            .insert(namespace_uri.to_owned(), prefix);
     }
 
-    fn define_prefix(&mut self, prefix: String, namespace_uri: &'d str) {
-        self.defined_prefixes.push((prefix, namespace_uri));
+    fn define_prefix(&mut self, prefix: String, namespace_uri: &str) {
+        self.defined_prefixes
+            .push((prefix, namespace_uri.to_owned()));
     }
 }
 
@@ -108,13 +86,13 @@ enum NamespaceType<'a> {
     Unknown,
 }
 
-struct PrefixMapping<'d> {
-    scopes: Vec<PrefixScope<'d>>,
+struct PrefixMapping {
+    scopes: Vec<PrefixScope>,
     generated_prefix_count: usize,
 }
 
-impl<'d> PrefixMapping<'d> {
-    fn new() -> PrefixMapping<'d> {
+impl PrefixMapping {
+    fn new() -> PrefixMapping {
         PrefixMapping {
             scopes: vec![PrefixScope::new()],
             generated_prefix_count: 0,
@@ -129,15 +107,15 @@ impl<'d> PrefixMapping<'d> {
         self.scopes.pop();
     }
 
-    fn active_default_namespace_uri(&self) -> Option<&'d str> {
+    fn active_default_namespace_uri(&self) -> Option<&str> {
         self.scopes
             .iter()
             .rev()
-            .filter_map(|s| s.default_namespace_uri)
+            .filter_map(|s| s.default_namespace_uri.as_deref())
             .next()
     }
 
-    fn active_namespace_uri_for_prefix(&self, prefix: &str) -> Option<&'d str> {
+    fn active_namespace_uri_for_prefix(&self, prefix: &str) -> Option<&str> {
         self.scopes
             .iter()
             .rev()
@@ -145,74 +123,77 @@ impl<'d> PrefixMapping<'d> {
             .next()
     }
 
-    fn default_namespace_uri_in_current_scope(&self) -> Option<&'d str> {
-        self.scopes.last().unwrap().default_namespace_uri
+    fn default_namespace_uri_in_current_scope(&self) -> Option<&str> {
+        self.scopes
+            .last()
+            .unwrap()
+            .default_namespace_uri
+            .as_deref()
     }
 
-    fn prefixes_in_current_scope(&self) -> slice::Iter<'_, (String, &'d str)> {
+    fn prefixes_in_current_scope(&self) -> std::slice::Iter<'_, (String, String)> {
         self.scopes.last().unwrap().defined_prefixes.iter()
     }
 
-    fn populate_scope(&mut self, element: &dom::Element<'d>, attributes: &[dom::Attribute<'d>]) {
-        self.scopes.last_mut().unwrap().default_namespace_uri = element.default_namespace_uri();
+    fn populate_scope(&mut self, element: &dom::Element<'_>, attributes: &[dom::Attribute<'_>]) {
+        self.scopes.last_mut().unwrap().default_namespace_uri =
+            element.default_namespace_uri().map(|s| s.to_string());
 
         if let Some(prefix) = element.preferred_prefix() {
             let name = element.name();
-            if let Some(uri) = name.namespace_uri {
-                self.set_prefix(prefix, uri);
+            let qn = name.get();
+            if let Some(uri) = qn.namespace_uri {
+                self.set_prefix(&prefix, uri);
             }
         }
 
         for attribute in attributes.iter() {
             if let Some(prefix) = attribute.preferred_prefix() {
                 let name = attribute.name();
-                if let Some(uri) = name.namespace_uri {
-                    self.set_prefix(prefix, uri);
+                let qn = name.get();
+                if let Some(uri) = qn.namespace_uri {
+                    self.set_prefix(&prefix, uri);
                 }
             }
         }
 
         let name = element.name();
-        if let Some(uri) = name.namespace_uri {
+        let qn = name.get();
+        if let Some(uri) = qn.namespace_uri {
             self.generate_prefix(uri);
         }
 
         for attribute in attributes.iter() {
             let name = attribute.name();
-            if let Some(uri) = name.namespace_uri {
+            let qn = name.get();
+            if let Some(uri) = qn.namespace_uri {
                 self.generate_prefix(uri);
             }
         }
     }
 
-    fn set_prefix(&mut self, prefix: &str, namespace_uri: &'d str) {
+    fn set_prefix(&mut self, prefix: &str, namespace_uri: &str) {
         let idx_of_last = self.scopes.len().saturating_sub(1);
         let (parents, current_scope) = self.scopes.split_at_mut(idx_of_last);
         let current_scope = &mut current_scope[0];
 
-        // If we're already using this prefix, we can't redefine it.
         if current_scope.has_prefix(prefix) {
             return;
         }
 
-        // We are definitely going to use this prefix, claim it
         current_scope.add_mapping(prefix, namespace_uri);
 
         for parent_scope in parents.iter().rev() {
             if parent_scope.prefix_is(prefix, namespace_uri) {
-                // A parent defines it as the URI we want.
-                // Prevent redefining it
                 return;
             }
         }
 
-        // Defined by us, must be added to the element
         current_scope.define_prefix(prefix.to_owned(), namespace_uri);
     }
 
-    fn generate_prefix(&mut self, namespace_uri: &'d str) {
+    fn generate_prefix(&mut self, namespace_uri: &str) {
         if Some(namespace_uri) == self.active_default_namespace_uri() {
-            // We already map this namespace to the default
             return;
         }
 
@@ -221,15 +202,11 @@ impl<'d> PrefixMapping<'d> {
         let current_scope = &mut current_scope[0];
 
         if current_scope.has_namespace_uri(namespace_uri) {
-            // We already map this namespace to *some* prefix
             return;
         }
 
-        // Check if the parent already defined a prefix for this ns
         for parent_scope in parents.iter().rev() {
             if let Some(prefix) = parent_scope.prefix_for(namespace_uri) {
-                // A parent happens to have a prefix for this URI.
-                // Prevent redefining it
                 current_scope.add_mapping(prefix, namespace_uri);
                 return;
             }
@@ -281,29 +258,6 @@ enum Content<'d> {
     ProcessingInstruction(dom::ProcessingInstruction<'d>),
 }
 
-/// Write a document, specifying some formatting options
-///
-/// For example, the default is to use single-quotes for attributes. To use
-/// double quotes for attributes, you need to use `set_single_quotes(false)`.
-///
-/// ```
-/// use sxd_document_no_unsafe::{Package, writer::Writer};
-///
-/// // Create a new document
-/// let p = Package::new();
-/// let doc = p.as_document();
-/// let el = doc.create_element("hello");
-/// el.set_attribute_value("a", "b");
-/// doc.root().append_child(el);
-///
-/// // Format the document as bytes
-/// let mut output = Vec::new();
-/// Writer::new().set_single_quotes(false).format_document(&doc, &mut output);
-///
-/// // Check that the output is correct
-/// let output_string = String::from_utf8(output).unwrap();
-/// assert_eq!(output_string, r#"<?xml version="1.0"?><hello a="b"/>"#);
-/// ```
 pub struct Writer {
     single_quotes: bool,
     write_encoding: bool,
@@ -319,18 +273,15 @@ impl Default for Writer {
 }
 
 impl Writer {
-    /// Create a new `Writer` with default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set whether single quotes should be used for writing a document.
     pub fn set_single_quotes(mut self, single_quotes: bool) -> Self {
         self.single_quotes = single_quotes;
         self
     }
 
-    /// Set whether the encoding should be specified in the output document header.
     pub fn set_write_encoding(mut self, write_encoding: bool) -> Self {
         self.write_encoding = write_encoding;
         self
@@ -346,10 +297,10 @@ impl Writer {
 }
 
 impl Writer {
-    fn format_qname<'d, W>(
+    fn format_qname<W>(
         &self,
-        q: QName<'d>,
-        mapping: &mut PrefixMapping<'d>,
+        q: QName<'_>,
+        mapping: &mut PrefixMapping,
         preferred_prefix: Option<&str>,
         ignore_default: bool,
         writer: &mut W,
@@ -357,13 +308,9 @@ impl Writer {
     where
         W: Write + ?Sized,
     {
-        // Can something without a namespace be prefixed? No, because
-        // defining a prefix requires a non-empty URI
         if let Some(namespace_uri) = q.namespace_uri {
             match mapping.namespace_type(preferred_prefix, namespace_uri, ignore_default) {
-                NamespaceType::Default => {
-                    // No need to do anything
-                }
+                NamespaceType::Default => {}
                 NamespaceType::Prefix(prefix) => {
                     writer.write_str(prefix)?;
                     writer.write_str(":")?;
@@ -400,7 +347,7 @@ impl Writer {
         &self,
         element: dom::Element<'d>,
         todo: &mut Vec<Content<'d>>,
-        mapping: &mut PrefixMapping<'d>,
+        mapping: &mut PrefixMapping,
         writer: &mut W,
     ) -> io::Result<()>
     where
@@ -411,20 +358,25 @@ impl Writer {
         mapping.populate_scope(&element, &attrs);
 
         writer.write_str("<")?;
+        let name = element.name();
+        let pref_prefix = element.preferred_prefix();
         self.format_qname(
-            element.name(),
+            name.get(),
             mapping,
-            element.preferred_prefix(),
+            pref_prefix.as_deref(),
             false,
             writer,
         )?;
 
         for attr in &attrs {
             writer.write_str(" ")?;
-            self.format_qname(attr.name(), mapping, attr.preferred_prefix(), true, writer)?;
+            let aname = attr.name();
+            let apref = attr.preferred_prefix();
+            self.format_qname(aname.get(), mapping, apref.as_deref(), true, writer)?;
             write!(writer, "=")?;
             write!(writer, "{}", self.quote_char())?;
-            self.format_attribute_value(attr.value(), writer)?;
+            let aval = attr.value();
+            self.format_attribute_value(&aval, writer)?;
             write!(writer, "{}", self.quote_char())?;
         }
 
@@ -462,20 +414,22 @@ impl Writer {
         }
     }
 
-    fn format_element_end<'d, W>(
+    fn format_element_end<W>(
         &self,
-        element: dom::Element<'d>,
-        mapping: &mut PrefixMapping<'d>,
+        element: dom::Element<'_>,
+        mapping: &mut PrefixMapping,
         writer: &mut W,
     ) -> io::Result<()>
     where
         W: Write + ?Sized,
     {
         writer.write_str("</")?;
+        let name = element.name();
+        let pref_prefix = element.preferred_prefix();
         self.format_qname(
-            element.name(),
+            name.get(),
             mapping,
-            element.preferred_prefix(),
+            pref_prefix.as_deref(),
             false,
             writer,
         )?;
@@ -486,8 +440,8 @@ impl Writer {
     where
         W: Write + ?Sized,
     {
-        for item in text
-            .text()
+        let t = text.text();
+        for item in t
             .split_keeping_delimiter(|c| c == '<' || c == '>' || c == '&')
         {
             match item {
@@ -505,7 +459,8 @@ impl Writer {
     where
         W: Write + ?Sized,
     {
-        write!(writer, "<!--{}-->", comment.text())
+        let t = comment.text();
+        write!(writer, "<!--{}-->", &*t)
     }
 
     fn format_processing_instruction<W>(
@@ -516,9 +471,11 @@ impl Writer {
     where
         W: Write + ?Sized,
     {
-        match pi.value() {
-            None => write!(writer, "<?{}?>", pi.target()),
-            Some(v) => write!(writer, "<?{} {}?>", pi.target(), v),
+        let target = pi.target();
+        let value = pi.value();
+        match value {
+            None => write!(writer, "<?{}?>", &*target),
+            Some(v) => write!(writer, "<?{} {}?>", &*target, &*v),
         }
     }
 
@@ -526,7 +483,7 @@ impl Writer {
         &self,
         content: Content<'d>,
         todo: &mut Vec<Content<'d>>,
-        mapping: &mut PrefixMapping<'d>,
+        mapping: &mut PrefixMapping,
         writer: &mut W,
     ) -> io::Result<()>
     where
@@ -587,7 +544,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Formats a document into a Write
     pub fn format_document<'d, W>(
         &self,
         doc: &'d dom::Document<'d>,
@@ -612,7 +568,6 @@ impl Writer {
     }
 }
 
-/// Formats a document into a `Write` using the default `Writer`
 pub fn format_document<'d, W>(doc: &'d dom::Document<'d>, writer: &mut W) -> io::Result<()>
 where
     W: Write + ?Sized,
@@ -627,7 +582,7 @@ mod test {
         Writer,
     };
 
-    fn format_xml<'d>(doc: &'d dom::Document<'d>) -> String {
+    fn format_xml(doc: &dom::Document<'_>) -> String {
         format_xml_writer(Writer::default(), doc)
     }
 
@@ -643,7 +598,6 @@ mod test {
         let d = p.as_document();
         let e = d.create_element("hello");
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello/>");
     }
@@ -654,7 +608,6 @@ mod test {
         let d = p.as_document();
         let e = d.create_element(("namespace", "local-part"));
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
@@ -669,7 +622,6 @@ mod test {
         let e = d.create_element(("namespace", "local-part"));
         e.set_default_namespace_uri(Some("namespace"));
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><local-part xmlns='namespace'/>");
     }
@@ -681,7 +633,6 @@ mod test {
         let e = d.create_element(("namespace", "local-part"));
         e.set_preferred_prefix(Some("prefix"));
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
@@ -696,9 +647,65 @@ mod test {
         let e = d.create_element("hello");
         e.set_attribute_value("a", "b");
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello a='b'/>");
+    }
+
+    #[test]
+    fn nested_element() {
+        let p = Package::new();
+        let d = p.as_document();
+        let hello = d.create_element("hello");
+        let world = d.create_element("world");
+        hello.append_child(world);
+        d.root().append_child(hello);
+        let xml = format_xml(&d);
+        assert_eq!(xml, "<?xml version='1.0'?><hello><world/></hello>");
+    }
+
+    #[test]
+    fn nested_text() {
+        let p = Package::new();
+        let d = p.as_document();
+        let hello = d.create_element("hello");
+        let text = d.create_text("A fine day to you!");
+        hello.append_child(text);
+        d.root().append_child(hello);
+        let xml = format_xml(&d);
+        assert_eq!(
+            xml,
+            "<?xml version='1.0'?><hello>A fine day to you!</hello>"
+        );
+    }
+
+    #[test]
+    fn nested_comment() {
+        let p = Package::new();
+        let d = p.as_document();
+        let hello = d.create_element("hello");
+        let comment = d.create_comment(" Fill this in ");
+        hello.append_child(comment);
+        d.root().append_child(hello);
+        let xml = format_xml(&d);
+        assert_eq!(
+            xml,
+            "<?xml version='1.0'?><hello><!-- Fill this in --></hello>"
+        );
+    }
+
+    #[test]
+    fn nested_processing_instruction_with_value() {
+        let p = Package::new();
+        let d = p.as_document();
+        let hello = d.create_element("hello");
+        let pi = d.create_processing_instruction("display", Some("screen"));
+        hello.append_child(pi);
+        d.root().append_child(hello);
+        let xml = format_xml(&d);
+        assert_eq!(
+            xml,
+            "<?xml version='1.0'?><hello><?display screen?></hello>"
+        );
     }
 
     #[test]
@@ -708,7 +715,6 @@ mod test {
         let e = d.create_element("hello");
         e.set_attribute_value("a", "b");
         d.root().append_child(e);
-
         let xml = format_xml_writer(Writer::new().set_single_quotes(false), &d);
         assert_eq!(xml, r#"<?xml version="1.0"?><hello a="b"/>"#);
     }
@@ -720,7 +726,6 @@ mod test {
         let e = d.create_element("hello");
         e.set_attribute_value(("namespace", "a"), "b");
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
@@ -736,7 +741,6 @@ mod test {
         let a = e.set_attribute_value(("namespace", "a"), "b");
         a.set_preferred_prefix(Some("p"));
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
@@ -753,7 +757,6 @@ mod test {
         e.set_default_namespace_uri(Some("namespace"));
         e.set_attribute_value(("namespace", "a"), "b");
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
@@ -766,15 +769,11 @@ mod test {
         let p = Package::new();
         let d = p.as_document();
         let e = d.create_element("hello");
-
         let a = e.set_attribute_value(("namespace1", "a1"), "b1");
         a.set_preferred_prefix(Some("p"));
-
         let a = e.set_attribute_value(("namespace2", "a2"), "b2");
         a.set_preferred_prefix(Some("p"));
-
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello p:a1='b1' autons0:a2='b2' xmlns:p='namespace1' xmlns:autons0='namespace2'/>");
     }
@@ -784,15 +783,11 @@ mod test {
         let p = Package::new();
         let d = p.as_document();
         let e = d.create_element("hello");
-
         let a = e.set_attribute_value(("namespace", "a1"), "b1");
         a.set_preferred_prefix(Some("p1"));
-
         let a = e.set_attribute_value(("namespace", "a2"), "b2");
         a.set_preferred_prefix(Some("p2"));
-
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello p1:a1='b1' p2:a2='b2' xmlns:p1='namespace' xmlns:p2='namespace'/>");
     }
@@ -804,25 +799,11 @@ mod test {
         let e = d.create_element("hello");
         e.set_attribute_value("name", r#"'1 < 2' & "4 > 3""#);
         d.root().append_child(e);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
             "<?xml version='1.0'?><hello name='&apos;1 &lt; 2&apos; &amp; &quot;4 &gt; 3&quot;'/>"
         );
-    }
-
-    #[test]
-    fn nested_element() {
-        let p = Package::new();
-        let d = p.as_document();
-        let hello = d.create_element("hello");
-        let world = d.create_element("world");
-        hello.append_child(world);
-        d.root().append_child(hello);
-
-        let xml = format_xml(&d);
-        assert_eq!(xml, "<?xml version='1.0'?><hello><world/></hello>");
     }
 
     #[test]
@@ -833,7 +814,6 @@ mod test {
         let world = d.create_element(("inner", "world"));
         hello.append_child(world);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><autons0:hello xmlns:autons0='outer'><autons1:world xmlns:autons1='inner'/></autons0:hello>");
     }
@@ -842,19 +822,15 @@ mod test {
     fn nested_empty_element_with_namespaces() {
         let p = Package::new();
         let d = p.as_document();
-
         let hello = d.create_element(("outer", "hello"));
         hello.set_default_namespace_uri(Some("outer"));
         hello.set_preferred_prefix(Some("o"));
-
         let world = d.create_element("world");
         world.set_default_namespace_uri(Some("inner"));
-
         let empty = d.create_element("empty");
         world.append_child(empty);
         hello.append_child(world);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello xmlns='outer' xmlns:o='outer'><world xmlns='inner'><empty/></world></hello>");
     }
@@ -867,7 +843,6 @@ mod test {
         let world = d.create_element(("ns", "world"));
         hello.append_child(world);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><autons0:hello xmlns:autons0='ns'><autons0:world/></autons0:hello>");
     }
@@ -882,27 +857,10 @@ mod test {
         world.set_preferred_prefix(Some("p"));
         hello.append_child(world);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
             "<?xml version='1.0'?><p:hello xmlns:p='outer'><p:world xmlns:p='inner'/></p:hello>"
-        );
-    }
-
-    #[test]
-    fn nested_text() {
-        let p = Package::new();
-        let d = p.as_document();
-        let hello = d.create_element("hello");
-        let text = d.create_text("A fine day to you!");
-        hello.append_child(text);
-        d.root().append_child(hello);
-
-        let xml = format_xml(&d);
-        assert_eq!(
-            xml,
-            "<?xml version='1.0'?><hello>A fine day to you!</hello>"
         );
     }
 
@@ -914,27 +872,10 @@ mod test {
         let text = d.create_text("1 < 3 & 4 > 2");
         hello.append_child(text);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(
             xml,
             "<?xml version='1.0'?><escaped>1 &lt; 3 &amp; 4 &gt; 2</escaped>"
-        );
-    }
-
-    #[test]
-    fn nested_comment() {
-        let p = Package::new();
-        let d = p.as_document();
-        let hello = d.create_element("hello");
-        let comment = d.create_comment(" Fill this in ");
-        hello.append_child(comment);
-        d.root().append_child(hello);
-
-        let xml = format_xml(&d);
-        assert_eq!(
-            xml,
-            "<?xml version='1.0'?><hello><!-- Fill this in --></hello>"
         );
     }
 
@@ -946,25 +887,8 @@ mod test {
         let pi = d.create_processing_instruction("display", None);
         hello.append_child(pi);
         d.root().append_child(hello);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><hello><?display?></hello>");
-    }
-
-    #[test]
-    fn nested_processing_instruction_with_value() {
-        let p = Package::new();
-        let d = p.as_document();
-        let hello = d.create_element("hello");
-        let pi = d.create_processing_instruction("display", Some("screen"));
-        hello.append_child(pi);
-        d.root().append_child(hello);
-
-        let xml = format_xml(&d);
-        assert_eq!(
-            xml,
-            "<?xml version='1.0'?><hello><?display screen?></hello>"
-        );
     }
 
     #[test]
@@ -973,7 +897,6 @@ mod test {
         let d = p.as_document();
         let comment = d.create_comment(" Fill this in ");
         d.root().append_child(comment);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><!-- Fill this in -->");
     }
@@ -984,7 +907,6 @@ mod test {
         let d = p.as_document();
         let pi = d.create_processing_instruction("display", None);
         d.root().append_child(pi);
-
         let xml = format_xml(&d);
         assert_eq!(xml, "<?xml version='1.0'?><?display?>");
     }
@@ -995,7 +917,6 @@ mod test {
         let d = p.as_document();
         let e = d.create_element("hello");
         d.root().append_child(e);
-
         let xml = format_xml_writer(Writer::new().set_write_encoding(true), &d);
         assert_eq!(xml, "<?xml version='1.0' encoding='UTF-8'?><hello/>");
     }
@@ -1006,7 +927,6 @@ mod test {
         let d = p.as_document();
         let e = d.create_element("hello");
         d.root().append_child(e);
-
         let xml = format_xml_writer(
             Writer::new()
                 .set_write_encoding(true)

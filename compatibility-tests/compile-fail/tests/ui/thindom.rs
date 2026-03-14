@@ -1,4 +1,4 @@
-use sxd_document::Package;
+use sxd_document_no_unsafe::Package;
 
 fn cannot_mutate_connections_while_iterating_over_root_children() {
     let package = Package::new();

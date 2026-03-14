@@ -606,20 +606,20 @@ impl Connections {
         }
     }
 
-    pub unsafe fn root_children(&self) -> &[ChildOfRoot] {
-        let parent_r = &*self.root;
+    pub fn root_children(&self) -> &[ChildOfRoot] {
+        let parent_r = unsafe { &*self.root };
         &parent_r.children
     }
 
-    pub unsafe fn element_children(&self, parent: *mut Element) -> &[ChildOfElement] {
-        let parent_r = &*parent;
+    pub fn element_children(&self, parent: *mut Element) -> &[ChildOfElement] {
+        let parent_r = unsafe { &*parent };
         &parent_r.children
     }
 
     /// Returns the sibling nodes that come before this node. The
     /// nodes are in document order.
-    pub unsafe fn element_preceding_siblings(&self, element: *mut Element) -> SiblingIter<'_> {
-        let element_r = &*element;
+    pub fn element_preceding_siblings(&self, element: *mut Element) -> SiblingIter<'_> {
+        let element_r = unsafe { &*element };
         match element_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Preceding,
@@ -637,8 +637,8 @@ impl Connections {
 
     /// Returns the sibling nodes that come after this node. The
     /// nodes are in document order.
-    pub unsafe fn element_following_siblings(&self, element: *mut Element) -> SiblingIter<'_> {
-        let element_r = &*element;
+    pub fn element_following_siblings(&self, element: *mut Element) -> SiblingIter<'_> {
+        let element_r = unsafe { &*element };
         match element_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Following,
@@ -656,8 +656,8 @@ impl Connections {
 
     /// Returns the sibling nodes that come before this node. The
     /// nodes are in document order.
-    pub unsafe fn text_preceding_siblings(&self, text: *mut Text) -> SiblingIter<'_> {
-        let text_r = &*text;
+    pub fn text_preceding_siblings(&self, text: *mut Text) -> SiblingIter<'_> {
+        let text_r = unsafe { &*text };
         match text_r.parent {
             Some(element_parent) => SiblingIter::of_element(
                 SiblingDirection::Preceding,
@@ -670,8 +670,8 @@ impl Connections {
 
     /// Returns the sibling nodes that come after this node. The
     /// nodes are in document order.
-    pub unsafe fn text_following_siblings(&self, text: *mut Text) -> SiblingIter<'_> {
-        let text_r = &*text;
+    pub fn text_following_siblings(&self, text: *mut Text) -> SiblingIter<'_> {
+        let text_r = unsafe { &*text };
         match text_r.parent {
             Some(element_parent) => SiblingIter::of_element(
                 SiblingDirection::Following,
@@ -684,8 +684,8 @@ impl Connections {
 
     /// Returns the sibling nodes that come before this node. The
     /// nodes are in document order.
-    pub unsafe fn comment_preceding_siblings(&self, comment: *mut Comment) -> SiblingIter<'_> {
-        let comment_r = &*comment;
+    pub fn comment_preceding_siblings(&self, comment: *mut Comment) -> SiblingIter<'_> {
+        let comment_r = unsafe { &*comment };
         match comment_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Preceding,
@@ -703,8 +703,8 @@ impl Connections {
 
     /// Returns the sibling nodes that come after this node. The
     /// nodes are in document order.
-    pub unsafe fn comment_following_siblings(&self, comment: *mut Comment) -> SiblingIter<'_> {
-        let comment_r = &*comment;
+    pub fn comment_following_siblings(&self, comment: *mut Comment) -> SiblingIter<'_> {
+        let comment_r = unsafe { &*comment };
         match comment_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Following,
@@ -722,11 +722,11 @@ impl Connections {
 
     /// Returns the sibling nodes that come before this node. The
     /// nodes are in document order.
-    pub unsafe fn processing_instruction_preceding_siblings(
+    pub fn processing_instruction_preceding_siblings(
         &self,
         pi: *mut ProcessingInstruction,
     ) -> SiblingIter<'_> {
-        let pi_r = &*pi;
+        let pi_r = unsafe { &*pi };
         match pi_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Preceding,
@@ -744,11 +744,11 @@ impl Connections {
 
     /// Returns the sibling nodes that come after this node. The
     /// nodes are in document order.
-    pub unsafe fn processing_instruction_following_siblings(
+    pub fn processing_instruction_following_siblings(
         &self,
         pi: *mut ProcessingInstruction,
     ) -> SiblingIter<'_> {
-        let pi_r = &*pi;
+        let pi_r = unsafe { &*pi };
         match pi_r.parent {
             Some(ParentOfChild::Root(root_parent)) => SiblingIter::of_root(
                 SiblingDirection::Following,
@@ -769,8 +769,8 @@ impl Connections {
         attr_r.parent
     }
 
-    pub unsafe fn attributes(&self, parent: *mut Element) -> &[*mut Attribute] {
-        let parent_r = &*parent;
+    pub fn attributes(&self, parent: *mut Element) -> &[*mut Attribute] {
+        let parent_r = unsafe { &*parent };
         &parent_r.attributes
     }
 
@@ -962,12 +962,12 @@ pub struct SiblingIter<'a> {
 }
 
 impl<'a> SiblingIter<'a> {
-    unsafe fn of_root(
+    fn of_root(
         direction: SiblingDirection,
         root_parent: *mut Root,
         child: ChildOfRoot,
     ) -> SiblingIter<'a> {
-        let root_parent_r = &*root_parent;
+        let root_parent_r = unsafe { &*root_parent };
         let data = &root_parent_r.children;
         let pos = data.iter().position(|c| *c == child).unwrap();
 
@@ -981,12 +981,12 @@ impl<'a> SiblingIter<'a> {
         }
     }
 
-    unsafe fn of_element(
+    fn of_element(
         direction: SiblingDirection,
         element_parent: *mut Element,
         child: ChildOfElement,
     ) -> SiblingIter<'a> {
-        let element_parent_r = &*element_parent;
+        let element_parent_r = unsafe { &*element_parent };
         let data = &element_parent_r.children;
         let pos = data.iter().position(|c| *c == child).unwrap();
 

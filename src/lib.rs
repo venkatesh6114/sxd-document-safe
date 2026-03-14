@@ -1,6 +1,6 @@
 //!
 //! ```
-//! use sxd_document::Package;
+//! use sxd_document_no_unsafe::Package;
 //! let package = Package::new();
 //! let doc = package.as_document();
 //!
@@ -56,23 +56,128 @@ extern crate peresil;
 use std::fmt;
 
 mod lazy_hash_map;
-mod raw;
 mod str;
 mod str_ext;
-mod string_pool;
 
+#[cfg(not(feature = "no-unsafe"))]
+mod raw;
+#[cfg(not(feature = "no-unsafe"))]
+mod string_pool;
+#[cfg(not(feature = "no-unsafe"))]
 pub mod dom;
-pub mod parser;
+#[cfg(not(feature = "no-unsafe"))]
 #[doc(hidden)]
 pub mod thindom;
+#[cfg(not(feature = "no-unsafe"))]
 pub mod writer;
 
+#[cfg(feature = "no-unsafe")]
+#[path = "raw_no_unsafe.rs"]
+mod raw;
+#[cfg(feature = "no-unsafe")]
+#[path = "string_pool_no_unsafe.rs"]
+mod string_pool;
+#[cfg(feature = "no-unsafe")]
+pub use string_pool::InternedString;
+#[cfg(feature = "no-unsafe")]
+#[path = "dom_no_unsafe.rs"]
+pub mod dom;
+#[cfg(feature = "no-unsafe")]
+#[path = "thindom_no_unsafe.rs"]
+#[doc(hidden)]
+pub mod thindom;
+#[cfg(feature = "no-unsafe")]
+#[path = "writer_no_unsafe.rs"]
+pub mod writer;
+
+pub mod parser;
+
+#[cfg(not(feature = "no-unsafe"))]
+#[cfg(feature = "__internal_expose_string_pool")]
+pub mod __internal {
+    pub use super::string_pool::StringPool;
+}
+
+#[cfg(feature = "no-unsafe")]
 #[cfg(feature = "__internal_expose_string_pool")]
 pub mod __internal {
     pub use super::string_pool::StringPool;
 }
 
 pub use crate::str::XmlChar;
+
+#[cfg(not(feature = "no-unsafe"))]
+#[macro_export]
+macro_rules! as_str {
+    ($e:expr) => {
+        $e
+    };
+}
+
+#[cfg(not(feature = "no-unsafe"))]
+#[macro_export]
+macro_rules! as_opt_str {
+    ($e:expr) => {
+        $e
+    };
+}
+
+#[cfg(not(feature = "no-unsafe"))]
+#[macro_export]
+macro_rules! as_qname {
+    ($e:expr) => {
+        $e
+    };
+}
+
+#[cfg(feature = "no-unsafe")]
+#[macro_export]
+macro_rules! as_str {
+    ($e:expr) => {
+        &*$e
+    };
+}
+
+#[cfg(feature = "no-unsafe")]
+#[macro_export]
+macro_rules! as_opt_str {
+    ($e:expr) => {
+        $e.as_deref()
+    };
+}
+
+#[cfg(feature = "no-unsafe")]
+#[macro_export]
+macro_rules! as_qname {
+    ($e:expr) => {
+        $e.get()
+    };
+}
+
+#[cfg(not(feature = "no-unsafe"))]
+#[macro_export]
+macro_rules! to_ns_str {
+    ($e:expr) => {
+        $e
+    };
+}
+
+#[cfg(feature = "no-unsafe")]
+#[macro_export]
+macro_rules! to_ns_str {
+    ($e:expr) => {
+        ($e).to_owned()
+    };
+}
+
+/// String type used for namespace prefix/URI storage.
+/// `&'d str` in default mode, `String` in no-unsafe mode.
+#[cfg(not(feature = "no-unsafe"))]
+pub type NsStr<'d> = &'d str;
+/// String type used for namespace prefix/URI storage.
+/// `&'d str` in default mode, `String` in no-unsafe mode.
+#[cfg(feature = "no-unsafe")]
+pub type NsStr<'d> = String;
 
 static XML_NS_PREFIX: &str = "xml";
 static XML_NS_URI: &str = "http://www.w3.org/XML/1998/namespace";
@@ -185,7 +290,10 @@ impl Package {
     #[doc(hidden)]
     pub fn as_thin_document(&self) -> (thindom::Storage<'_>, thindom::Connections<'_>) {
         let s = thindom::Storage::new(&self.storage);
+        #[cfg(not(feature = "no-unsafe"))]
         let c = thindom::Connections::new(&self.connections);
+        #[cfg(feature = "no-unsafe")]
+        let c = thindom::Connections::new(&self.connections, &self.storage);
         (s, c)
     }
 }
