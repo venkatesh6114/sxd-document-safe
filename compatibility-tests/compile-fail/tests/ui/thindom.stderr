@@ -1,7 +1,7 @@
 error[E0502]: cannot borrow `c` as mutable because it is also borrowed as immutable
   --> tests/ui/thindom.rs:10:9
    |
-9  |     for _ in c.root_children() {
+ 9 |     for _ in c.root_children() {
    |              -----------------
    |              |
    |              immutable borrow occurs here
